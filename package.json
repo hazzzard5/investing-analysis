@@ -1,0 +1,30 @@
+{
+  "name": "investing-analysis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-agent research and paper-portfolio dashboard. Research only, not financial advice.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/**/*.test.ts",
+    "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
+    "run:pipeline": "tsx --env-file=.env scripts/run.ts",
+    "snapshot": "tsx --env-file=.env scripts/snapshot.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "next": "^15.1.0",
+    "postgres": "^3.4.5",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
