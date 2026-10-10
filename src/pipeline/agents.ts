@@ -95,3 +95,9 @@ export const riskCommentary = (thesis: string, metrics: unknown) =>
     thesis,
     metrics,
   );
+
+export const tradeIdea = (thesis: string, data: unknown) =>
+  askJson<import("../lib/tradeIdeas").RawIdea & { direction: string }>(
+    `${BASE}\nYour role: Trade-setup analyst. Propose at most one paper-trading setup for this stock, or none. Data is delayed by about a day, so levels are zones, not live triggers.`,
+    `Thesis: ${thesis}\n\nUsing the technicals (including overextension), DCF and multiples, memos and macro backdrop, decide:\n- "long": a buy zone with entry below or near the last price, a price target and a stop.\n- "short": only when the stock looks overextended or overvalued AND macro or momentum supports it; entry, a lower target, a higher stop. Note borrow costs and squeeze risk in the rationale.\n- "none": when there is no edge.\nReturn JSON: {"direction":"long|short|none","entry":number,"target":number,"stop":number,"horizon":"e.g. 1-3 months","condition":"what must happen, e.g. pullback to the 50-day average","rationale":"2-3 sentences citing the data","confidence":<1-10>}. Prices must be in the same units as last_price.\n\n${JSON.stringify(data).slice(0, 20_000)}`,
+  );

@@ -27,6 +27,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const [pf] = await sql`select * from portfolios where run_id = ${id}`;
   const positions = pf ? await sql`select * from positions where portfolio_id = ${pf.id} order by weight desc` : [];
   const risk = await sql`select * from risk_metrics where run_id = ${id}`;
+  const ideas = await sql`select * from trade_ideas where run_id = ${id} order by confidence desc, reward_risk desc`;
   const snaps = pf ? await sql`select date, value, spy_value from snapshots where portfolio_id = ${pf.id} order by date` : [];
 
   const pRisk = Object.fromEntries(risk.filter((r) => r.scope === "portfolio").map((r) => [r.metric, r]));
@@ -87,6 +88,40 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
             <div><div className="muted">Avg pairwise correlation</div><b>{Number(pRisk.avg_pairwise_correlation?.value).toFixed(2)}</b></div>
             <div><div className="muted">Top sector ({pRisk.top_sector_weight?.detail?.sector})</div><b>{pct(pRisk.top_sector_weight?.value)}</b></div>
           </div>
+        </section>
+      )}
+
+      {ideas.length > 0 && (
+        <section className="card">
+          <h2 style={{ marginTop: 0 }}>Trade ideas (research, paper only)</h2>
+          <p className="muted">
+            Levels use data that is about a day old, so treat them as zones. They are not advice and nothing is executed; shorts ignore borrow cost and squeeze risk.
+          </p>
+          <table>
+            <thead>
+              <tr><th>Stock</th><th>Side</th><th className="num">Last</th><th className="num">Entry</th><th className="num">Target</th><th className="num">Stop</th><th className="num">R:R</th><th className="num">Conf.</th></tr>
+            </thead>
+            <tbody>
+              {ideas.map((i) => (
+                <tr key={i.id} title={`${i.condition}\n${i.rationale}`}>
+                  <td><b>{i.ticker}</b></td>
+                  <td><span className="pill" style={{ color: i.direction === "long" ? "var(--good)" : "var(--bad)" }}>{i.direction}</span></td>
+                  <td className="num">${Number(i.last_price).toFixed(2)}</td>
+                  <td className="num">${Number(i.entry).toFixed(2)}</td>
+                  <td className="num">${Number(i.target).toFixed(2)}</td>
+                  <td className="num">${Number(i.stop).toFixed(2)}</td>
+                  <td className="num">{Number(i.reward_risk).toFixed(1)}</td>
+                  <td className="num">{Number(i.confidence)}/10</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {ideas.map((i) => (
+            <details key={i.id}>
+              <summary>{i.ticker}: {i.condition || "setup"} ({i.horizon})</summary>
+              <div style={{ whiteSpace: "pre-wrap" }}>{i.rationale}</div>
+            </details>
+          ))}
         </section>
       )}
 

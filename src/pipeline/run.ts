@@ -1,5 +1,9 @@
 import { sql } from "../lib/db";
-import * as fmp from "../lib/fmp";
+import { data, type Profile } from "../lib/data";
+import { macroSnapshot } from "../lib/macro";
+import { technicals } from "../lib/technicals";
+import { validateIdea } from "../lib/tradeIdeas";
+import { dcf } from "../lib/valuation";
 import { annualVol, capWeights, correlation, maxDrawdown, portfolioPath, type Series } from "../lib/stats";
 import * as agents from "./agents";
 import { memoMarkdown, type Memo } from "./agents";
@@ -50,37 +54,36 @@ export async function runPipeline(runId: string): Promise<void> {
     // 1. Screening
     await stage(runId, "screening");
     const plan = await agents.planScreen(thesis);
-    const screened = await fmp.screener({ ...plan.criteria, limit: 25 }).catch(() => []);
+    const screened = await data.screen(plan.criteria).catch(() => [] as string[]);
     const symbols = [
-      ...new Set([...(plan.tickers ?? []), ...screened.map((s: any) => s.symbol)].map((s) => String(s).toUpperCase())),
+      ...new Set([...(plan.tickers ?? []), ...screened].map((s) => String(s).toUpperCase())),
     ];
-    const profiles = (await pool(symbols.slice(0, 30), async (s) => ({ s, p: await fmp.profile(s).catch(() => null) })))
-      .filter((x) => x.p)
+    const profiles = (await pool(symbols.slice(0, 30), async (s) => ({ s, p: await data.profile(s).catch(() => null) })))
+      .filter((x): x is { s: string; p: Profile } => x.p !== null)
       .slice(0, MAX_CANDIDATES);
     if (profiles.length < minHoldings) throw new Error(`Only ${profiles.length} usable candidates found; need at least ${minHoldings}`);
     await saveMemo(runId, "screening", null, {
       verdict: `${profiles.length} candidates`,
       score: 5,
       summary: plan.rationale,
-      points: profiles.map((x) => `${x.s}: ${x.p.companyName} (${x.p.sector}, mkt cap ${Math.round(x.p.marketCap / 1e6)}M)`),
+      points: profiles.map((x) => `${x.s}: ${x.p.name} (${x.p.sector}, mkt cap ${Math.round(x.p.marketCap / 1e6)}M)`),
     });
 
     // 2. Per-company analysis: fundamentals, valuation, sentiment, then devil's advocate
     await stage(runId, "analysis");
+    const macro = await macroSnapshot();
     const analysed = await pool(profiles, async ({ s, p }) => {
-      const [r, inc, cf, bs, d, q, n] = await Promise.all([
-        fmp.ratios(s).catch(() => []),
-        fmp.income(s).catch(() => []),
-        fmp.cashflow(s).catch(() => []),
-        fmp.balance(s).catch(() => []),
-        fmp.dcf(s).catch(() => null),
-        fmp.quote(s).catch(() => null),
-        fmp.news(s).catch(() => []),
+      const [fund, hist, n] = await Promise.all([
+        data.fundamentals(s).catch(() => ({}) as Record<string, any>),
+        data.prices(s).catch(() => [] as Series),
+        data.news(s).catch(() => []),
       ]);
+      const tech = technicals(hist);
+      const dcfValue = dcf(fund as any);
       const [f, v, ns] = await Promise.all([
-        agents.fundamentals(thesis, { profile: p, ratios: r, income: inc, cashflow: cf, balance: bs }),
-        agents.valuation(thesis, { profile: p, dcf: d, quote: q, ratios: r.slice(0, 1) }),
-        agents.sentiment(thesis, { headlines: n.map((x: any) => ({ date: x.publishedDate, title: x.title, text: String(x.text ?? "").slice(0, 300) })) }),
+        agents.fundamentals(thesis, { profile: p, fundamentals: fund }),
+        agents.valuation(thesis, { profile: p, price: p.price, dcf: dcfValue, fundamentals: fund }),
+        agents.sentiment(thesis, { headlines: n }),
       ]);
       const da = await agents.devilsAdvocate(thesis, { profile: p, fundamentals: f, valuation: v, sentiment: ns });
       await Promise.all([
@@ -89,19 +92,32 @@ export async function runPipeline(runId: string): Promise<void> {
         saveMemo(runId, "news", s, ns),
         saveMemo(runId, "devils_advocate", s, da),
       ]);
+      const rawIdea = await agents
+        .tradeIdea(thesis, {
+          ticker: s,
+          last_price: p.price,
+          technicals: tech,
+          dcf: dcfValue,
+          analyst_target_mean: (fund as any).analystTargetMean ?? null,
+          macro,
+          memos: { fundamentals: f, valuation: v, sentiment: ns, bear_case: da },
+        })
+        .catch(() => null);
+      const idea = validateIdea(rawIdea, p.price);
+      if (idea) {
+        await sql`insert into trade_ideas (run_id, ticker, direction, entry, target, stop, reward_risk, last_price, horizon, condition, rationale, confidence)
+                  values (${runId}, ${s}, ${idea.direction}, ${idea.entry}, ${idea.target}, ${idea.stop}, ${idea.rewardRisk}, ${p.price}, ${idea.horizon}, ${idea.condition}, ${idea.rationale}, ${idea.confidence})`;
+      }
       // Composite 1-10: bear-case strength counts against the stock.
       const composite = (f.score + v.score + ns.score + (11 - da.score)) / 4;
-      return { ticker: s, profile: p, price: Number(q?.price ?? p.price), composite, f, v, ns, da };
+      return { ticker: s, profile: p, price: Number(p.price), hist, composite, f, v, ns, da };
     });
 
     // 3. Risk (computed in code from price history)
     await stage(runId, "risk");
-    const spy = await fmp.prices("SPY");
-    const hist = new Map<string, Series>();
-    await pool(analysed, async (a) => {
-      hist.set(a.ticker, await fmp.prices(a.ticker).catch(() => []));
-    });
-    const usable = analysed.filter((a) => (hist.get(a.ticker)?.length ?? 0) > 60 && a.price > 0);
+    const spy = await data.prices("SPY");
+    const hist = new Map<string, Series>(analysed.map((a) => [a.ticker, a.hist]));
+    const usable = analysed.filter((a) => a.hist.length > 60 && a.price > 0);
     if (usable.length < minHoldings) throw new Error(`Only ${usable.length} candidates have price history; need ${minHoldings}`);
     for (const a of usable) {
       const s = hist.get(a.ticker)!;
@@ -116,7 +132,7 @@ export async function runPipeline(runId: string): Promise<void> {
     await stage(runId, "portfolio");
     const summaries = usable.map((a) => ({
       ticker: a.ticker,
-      name: a.profile.companyName,
+      name: a.profile.name,
       sector: a.profile.sector,
       composite: Number(a.composite.toFixed(2)),
       fundamentals: a.f.verdict,
@@ -148,7 +164,7 @@ export async function runPipeline(runId: string): Promise<void> {
       invested += shares * a.price;
       held.push({ ticker: a.ticker, weight: weights[i], series: hist.get(a.ticker)!, sector: a.profile.sector ?? "Unknown" });
       await sql`insert into positions (portfolio_id, ticker, name, sector, weight, shares, entry_price, rationale)
-                values (${pf.id}, ${a.ticker}, ${a.profile.companyName}, ${a.profile.sector}, ${weights[i]}, ${shares}, ${a.price}, ${picks[i].rationale})`;
+                values (${pf.id}, ${a.ticker}, ${a.profile.name}, ${a.profile.sector}, ${weights[i]}, ${shares}, ${a.price}, ${picks[i].rationale})`;
     }
     await sql`update portfolios set cash = ${amount - invested} where id = ${pf.id}`;
 
