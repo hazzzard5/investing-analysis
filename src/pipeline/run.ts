@@ -92,21 +92,28 @@ export async function runPipeline(runId: string): Promise<void> {
         saveMemo(runId, "news", s, ns),
         saveMemo(runId, "devils_advocate", s, da),
       ]);
+      const th = await agents.stockThesis(thesis, {
+        ticker: s,
+        last_price: p.price,
+        dcf: dcfValue,
+        analyst_target_mean: (fund as any).analystTargetMean ?? null,
+        multiples: { trailingPE: (fund as any).trailingPE, forwardPE: (fund as any).forwardPE, pegRatio: (fund as any).pegRatio },
+        memos: { fundamentals: f, valuation: v, sentiment: ns, devils_advocate: da },
+      });
+      await saveMemo(runId, "thesis", s, th);
       const rawIdea = await agents
         .tradeIdea(thesis, {
           ticker: s,
           last_price: p.price,
+          stock_thesis: { stance: th.stance, summary: th.summary, fairValueLow: th.fairValueLow, fairValueHigh: th.fairValueHigh, catalysts: th.catalysts, invalidation: th.invalidation },
           technicals: tech,
-          dcf: dcfValue,
-          analyst_target_mean: (fund as any).analystTargetMean ?? null,
           macro,
-          memos: { fundamentals: f, valuation: v, sentiment: ns, bear_case: da },
         })
         .catch(() => null);
-      const idea = validateIdea(rawIdea, p.price);
+      const idea = validateIdea(rawIdea, p.price, th);
       if (idea) {
-        await sql`insert into trade_ideas (run_id, ticker, direction, entry, target, stop, reward_risk, last_price, horizon, condition, rationale, confidence)
-                  values (${runId}, ${s}, ${idea.direction}, ${idea.entry}, ${idea.target}, ${idea.stop}, ${idea.rewardRisk}, ${p.price}, ${idea.horizon}, ${idea.condition}, ${idea.rationale}, ${idea.confidence})`;
+        await sql`insert into trade_ideas (run_id, ticker, direction, entry, target, stop, reward_risk, last_price, horizon, condition, rationale, confidence, stance, thesis, entry_basis, target_basis, stop_basis, invalidation)
+                  values (${runId}, ${s}, ${idea.direction}, ${idea.entry}, ${idea.target}, ${idea.stop}, ${idea.rewardRisk}, ${p.price}, ${idea.horizon}, ${idea.condition}, ${idea.rationale}, ${idea.confidence}, ${th.stance}, ${th.summary}, ${idea.entryBasis}, ${idea.targetBasis}, ${idea.stopBasis}, ${(th.invalidation ?? []).join("; ")})`;
       }
       // Composite 1-10: bear-case strength counts against the stock.
       const composite = (f.score + v.score + ns.score + (11 - da.score)) / 4;

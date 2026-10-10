@@ -96,8 +96,34 @@ export const riskCommentary = (thesis: string, metrics: unknown) =>
     metrics,
   );
 
+export interface StockThesis extends Memo {
+  stance: "bullish" | "bearish" | "neutral";
+  fairValueLow: number | null;
+  fairValueHigh: number | null;
+  catalysts: string[];
+  invalidation: string[];
+}
+
+/** Lead analyst: synthesises the other agents' memos into one per-stock thesis. Trade levels must come from this. */
+export const stockThesis = async (thesis: string, data: unknown): Promise<StockThesis> => {
+  const t = await askJson<StockThesis & { conviction?: number }>(
+    `${BASE}\nYour role: Lead analyst. Merge the fundamentals, valuation, sentiment and devil's advocate memos into a single investment thesis for this stock, and say what would prove it wrong.`,
+    `Portfolio thesis: ${thesis}\n\nReturn JSON: {"stance":"bullish|bearish|neutral","verdict":"short label","conviction":<1-10>,"summary":"3-4 sentences: why, citing the memos","fairValueLow":number|null,"fairValueHigh":number|null,"catalysts":["what could move the price toward fair value"],"invalidation":["specific, observable events or price levels that would break the thesis"]}.\nFair value must come from the provided DCF range, multiples or analyst targets; use null if the data does not support one. A bearish stance needs a real overvaluation or deterioration case, not just a strong bear memo.\n\n${JSON.stringify(data).slice(0, 20_000)}`,
+  );
+  t.stance = ["bullish", "bearish", "neutral"].includes(t.stance) ? t.stance : "neutral";
+  t.score = Math.min(10, Math.max(1, Number(t.conviction) || 5));
+  t.points = [
+    ...(t.fairValueLow && t.fairValueHigh ? [`Fair value range: $${Number(t.fairValueLow).toFixed(2)} to $${Number(t.fairValueHigh).toFixed(2)}`] : []),
+    ...(t.catalysts ?? []).map((c) => `Catalyst: ${c}`),
+    ...(t.invalidation ?? []).map((c) => `Invalidation: ${c}`),
+  ];
+  t.fairValueLow = Number(t.fairValueLow) > 0 ? Number(t.fairValueLow) : null;
+  t.fairValueHigh = Number(t.fairValueHigh) > 0 ? Number(t.fairValueHigh) : null;
+  return t;
+};
+
 export const tradeIdea = (thesis: string, data: unknown) =>
   askJson<import("../lib/tradeIdeas").RawIdea & { direction: string }>(
-    `${BASE}\nYour role: Trade-setup analyst. Propose at most one paper-trading setup for this stock, or none. Data is delayed by about a day, so levels are zones, not live triggers.`,
-    `Thesis: ${thesis}\n\nUsing the technicals (including overextension), DCF and multiples, memos and macro backdrop, decide:\n- "long": a buy zone with entry below or near the last price, a price target and a stop.\n- "short": only when the stock looks overextended or overvalued AND macro or momentum supports it; entry, a lower target, a higher stop. Note borrow costs and squeeze risk in the rationale.\n- "none": when there is no edge.\nReturn JSON: {"direction":"long|short|none","entry":number,"target":number,"stop":number,"horizon":"e.g. 1-3 months","condition":"what must happen, e.g. pullback to the 50-day average","rationale":"2-3 sentences citing the data","confidence":<1-10>}. Prices must be in the same units as last_price.\n\n${JSON.stringify(data).slice(0, 20_000)}`,
+    `${BASE}\nYour role: Trade-setup analyst. Turn the lead analyst's stock thesis into at most one paper-trading setup, or none. Data is delayed by about a day, so levels are zones, not live triggers.`,
+    `Portfolio thesis: ${thesis}\n\nThe stock_thesis in the data is the basis for everything. Derive the levels from it:\n- direction must match its stance: bullish gives "long", bearish gives "short", neutral gives "none".\n- entry: a zone justified by the thesis fair value (a discount to it) and, for timing, the technicals (pullback to a moving average, overextension).\n- target: at or below the thesis fair value for a long; at or above it for a short. Name the fair value you used.\n- stop: a price that invalidates the thesis, tied to one of its invalidation points or a technical level behind the entry.\n- Shorts also need overextension or deteriorating fundamentals plus supportive macro; mention borrow cost and squeeze risk.\nReturn JSON: {"direction":"long|short|none","entry":number,"target":number,"stop":number,"entry_basis":"why this entry, citing the thesis and data","target_basis":"which fair value or target","stop_basis":"which invalidation point","horizon":"e.g. 1-3 months","condition":"what must happen before acting","rationale":"2 sentences","confidence":<1-10>}. Prices use the same units as last_price.\n\n${JSON.stringify(data).slice(0, 20_000)}`,
   );

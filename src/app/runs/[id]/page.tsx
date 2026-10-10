@@ -12,6 +12,7 @@ const AGENT_LABEL: Record<string, string> = {
   valuation: "Valuation",
   news: "News and sentiment",
   devils_advocate: "Devil's advocate",
+  thesis: "Lead analyst thesis",
   risk: "Risk",
   portfolio: "Portfolio constructor",
 };
@@ -118,8 +119,10 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
           </table>
           {ideas.map((i) => (
             <details key={i.id}>
-              <summary>{i.ticker}: {i.condition || "setup"} ({i.horizon})</summary>
-              <div style={{ whiteSpace: "pre-wrap" }}>{i.rationale}</div>
+              <summary>{i.ticker} ({i.stance}): {i.condition || "setup"} ({i.horizon})</summary>
+              <div style={{ whiteSpace: "pre-wrap" }}>
+                {`Thesis: ${i.thesis ?? ""}\n\nEntry: ${i.entry_basis ?? ""}\nTarget: ${i.target_basis ?? ""}\nStop: ${i.stop_basis ?? ""}\nThesis breaks if: ${i.invalidation ?? ""}\n\n${i.rationale ?? ""}`}
+              </div>
             </details>
           ))}
         </section>
