@@ -33,6 +33,8 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
 
   const pRisk = Object.fromEntries(risk.filter((r) => r.scope === "portfolio").map((r) => [r.metric, r]));
   const tRisk = (t: string, m: string) => risk.find((r) => r.scope === "ticker" && r.ticker === t && r.metric === m)?.value;
+  const theses = memos.filter((m) => m.agent === "thesis");
+  const held = new Set(positions.map((p) => p.ticker));
   const general = memos.filter((m) => !m.ticker);
   const perTicker = new Map<string, any[]>();
   for (const m of memos.filter((m) => m.ticker)) perTicker.set(m.ticker, [...(perTicker.get(m.ticker) ?? []), m]);
@@ -77,6 +79,29 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
           ) : (
             <p className="muted">Paper tracking since {String(pf.start_date).slice(0, 10)}.</p>
           )}
+        </section>
+      )}
+
+      {theses.length > 0 && (
+        <section className="card">
+          <h2 style={{ marginTop: 0 }}>Stock theses</h2>
+          <p className="muted">One thesis per candidate, written by the lead analyst from the other agents' memos. Trade levels are derived from these.</p>
+          {theses.map((t) => {
+            const c = t.content as any;
+            return (
+              <details key={t.id} open={held.has(t.ticker)}>
+                <summary>
+                  {t.ticker}{" "}
+                  <span className="pill" style={{ color: c.stance === "bullish" ? "var(--good)" : c.stance === "bearish" ? "var(--bad)" : "var(--muted)" }}>{c.stance}</span>{" "}
+                  <span className="muted">conviction {Number(t.score)}/10{held.has(t.ticker) ? " · in proposed portfolio" : ""}</span>
+                </summary>
+                <p>{c.summary}</p>
+                {c.fairValueLow && c.fairValueHigh && <p className="muted">Fair value ${Number(c.fairValueLow).toFixed(2)} to ${Number(c.fairValueHigh).toFixed(2)}</p>}
+                {c.catalysts?.length > 0 && <><b>Catalysts</b><ul>{c.catalysts.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul></>}
+                {c.invalidation?.length > 0 && <><b>Thesis breaks if</b><ul>{c.invalidation.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul></>}
+              </details>
+            );
+          })}
         </section>
       )}
 
