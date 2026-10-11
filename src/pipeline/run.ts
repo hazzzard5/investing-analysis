@@ -81,6 +81,7 @@ export async function runPipeline(runId: string): Promise<void> {
       ]);
       if (p && hist.length > 60) cache.set(u.symbol, { p, fund, hist });
     });
+    const subIndustryOf = new Map(universe.map((u) => [u.symbol, u.subIndustry]));
     const metrics: Metrics[] = [...cache.entries()]
       .filter(([, c]) => (!pick.marketCapMin || c.p.marketCap >= pick.marketCapMin) && (!pick.marketCapMax || c.p.marketCap <= pick.marketCapMax))
       .map(([symbol, c]) => {
@@ -97,6 +98,7 @@ export async function runPipeline(runId: string): Promise<void> {
           pe: c.fund.trailingPE && c.fund.trailingPE > 0 ? c.fund.trailingPE : null,
           debtToEquity: c.fund.debtToEquity ?? null,
           extension: t?.pctFromSma200 ?? null,
+          group: subIndustryOf.get(symbol),
         };
       });
     const ranked = rankCandidates(metrics, candidates);
@@ -158,7 +160,7 @@ export async function runPipeline(runId: string): Promise<void> {
       }
       // Composite 1-10: bear-case strength counts against the stock.
       const composite = (f.score + v.score + ns.score + (11 - da.score)) / 4;
-      return { ticker: s, side, stance: th.stance, profile: p, price: Number(p.price), hist, composite, f, v, ns, da };
+      return { ticker: s, side, stance: th.stance, fit: th.thesisFit, profile: p, price: Number(p.price), hist, composite, f, v, ns, da };
     });
 
     // 3. Risk (computed in code from price history)
@@ -179,7 +181,10 @@ export async function runPipeline(runId: string): Promise<void> {
     // 4. Portfolio construction
     await stage(runId, "portfolio");
     // The proposed portfolio is long-only: short candidates and bearish theses appear as trade ideas, not holdings.
-    let eligible = usable.filter((a) => a.side === "long" && a.stance !== "bearish");
+    // Only names that fit the thesis (fit >= 6) are held. Bullish names first; neutral names fill any shortfall.
+    const fits = usable.filter((a) => a.stance !== "bearish" && a.fit >= 6);
+    let eligible = fits.filter((a) => a.side === "long" && a.stance === "bullish");
+    if (eligible.length < minHoldings) eligible = [...eligible, ...fits.filter((a) => !eligible.includes(a)).sort((a, b) => b.composite - a.composite)];
     if (eligible.length < minHoldings) eligible = usable.filter((a) => a.stance !== "bearish");
     if (eligible.length < minHoldings) eligible = usable;
     const summaries = eligible.map((a) => ({
@@ -187,6 +192,7 @@ export async function runPipeline(runId: string): Promise<void> {
       name: a.profile.name,
       sector: a.profile.sector,
       stance: a.stance,
+      thesis_fit: a.fit,
       composite: Number(a.composite.toFixed(2)),
       fundamentals: a.f.verdict,
       valuation: a.v.verdict,

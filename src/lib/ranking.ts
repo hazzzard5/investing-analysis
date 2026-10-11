@@ -9,6 +9,7 @@ export interface Metrics {
   pe: number | null;
   debtToEquity: number | null;
   extension: number | null; // distance above 200-day average
+  group?: string; // sub-industry: no group may supply more than half of the long candidates
 }
 
 const FACTORS: { key: keyof Metrics; sign: 1 | -1 }[] = [
@@ -47,14 +48,25 @@ export function rankCandidates(all: Metrics[], count: number): Ranked[] {
     .map((m, i) => {
       const parts = FACTORS.map((f, j) => (z[j][i] === null ? null : z[j][i]! * f.sign)).filter((v): v is number => v !== null);
       const ext = m.extension ?? 0;
-      return { symbol: m.symbol, factors: parts.length, score: parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : NaN, ext };
+      return { symbol: m.symbol, group: m.group, factors: parts.length, score: parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : NaN, ext };
     })
     .filter((s) => s.factors >= 3 && Number.isFinite(s.score))
   const nShort = Math.floor(count * 0.3);
   const nLong = count - nShort;
   const byScore = [...scored].sort((a, b) => b.score - a.score);
-  const longs = byScore.slice(0, nLong);
-  const rest = byScore.slice(nLong);
+  // Keep one sub-industry from filling the whole list: cap each at half the long slots (when groups are known).
+  const cap = Math.max(1, Math.ceil(nLong / 2));
+  const used = new Map<string, number>();
+  const longs: typeof byScore = [];
+  for (const x of byScore) {
+    if (longs.length >= nLong) break;
+    const g = x.group ?? x.symbol;
+    if ((used.get(g) ?? 0) >= cap) continue;
+    used.set(g, (used.get(g) ?? 0) + 1);
+    longs.push(x);
+  }
+  for (const x of byScore) if (longs.length < nLong && !longs.includes(x)) longs.push(x);
+  const rest = byScore.filter((x) => !longs.includes(x));
   // shorts: weakest scores, with extension (stretched price) pushing a name up the list
   const shorts = [...rest].sort((a, b) => a.score - 0.5 * Math.max(0, a.ext) - (b.score - 0.5 * Math.max(0, b.ext))).slice(0, nShort);
   return [
