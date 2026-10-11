@@ -9,6 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts",
+    "db": "tsx scripts/db.ts",
     "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
     "run:pipeline": "tsx --env-file=.env scripts/run.ts",
     "snapshot": "tsx --env-file=.env scripts/snapshot.ts",
@@ -27,6 +28,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "embedded-postgres": "^18.4.0-beta.17",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

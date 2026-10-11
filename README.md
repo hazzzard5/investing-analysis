@@ -22,16 +22,16 @@ A thesis is written once and not regenerated, so you can see whether the origina
 
 ## Run it locally
 
-Needs Node 22+, Docker (for the database) and an Anthropic API key. Market data comes from Yahoo Finance by default (no key); macro data from FRED's public CSVs (no key).
+Needs Node 22+ and an Anthropic API key. No Docker required. Market data comes from Yahoo Finance by default (no key); macro data from FRED's public CSVs (no key).
 
 ```bash
 npm install
 cp .env.example .env          # add ANTHROPIC_API_KEY
-npx supabase start            # local Postgres on :54322, applies supabase/migrations
-npm run dev                   # http://localhost:3000
+npm run db                    # terminal 1: local Postgres on :54322 (data kept in .data/), applies migrations, leave running
+npm run dev                   # terminal 2: http://localhost:3000
 ```
 
-No Docker? Point `DATABASE_URL` at any Postgres and run `npm run db:migrate`.
+`npm run db` downloads real Postgres binaries through npm, so nothing else needs installing. If you prefer Docker, `npx supabase start` gives the same database on the same port. Or point `DATABASE_URL` at any Postgres and run `npm run db:migrate`.
 
 ## Data
 
@@ -55,7 +55,7 @@ Everything runs locally, so use your computer's scheduler. `npm run monitor` is 
 30 17 * * 1-5  cd /path/to/investing-analysis && npm run monitor >> monitor.log 2>&1
 ```
 
-The computer must be awake and the database running (`npx supabase start`) when the job fires. On macOS use `launchd` or Calendar-triggered Shortcuts if cron is awkward; on Windows use Task Scheduler. A missed run is harmless: the next run catches up on all the closes since the last check.
+The computer must be awake and the database running (`npm run db`) when the job fires. On macOS use `launchd` or Calendar-triggered Shortcuts if cron is awkward; on Windows use Task Scheduler. A missed run is harmless: the next run catches up on all the closes since the last check.
 
 ## If you ever host it (Vercel + hosted Supabase)
 
