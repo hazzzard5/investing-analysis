@@ -53,7 +53,7 @@ export default function RunForm() {
         </label>
         <label>
           Stocks to analyse in depth
-          <input name="candidates" type="number" min="5" max="40" defaultValue={15} required />
+          <input name="candidates" type="number" min="5" max="12" defaultValue={8} required />
         </label>
       </div>
       <button disabled={busy}>{busy ? "Starting…" : "Run research"}</button>

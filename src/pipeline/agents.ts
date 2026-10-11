@@ -72,7 +72,15 @@ export interface UniversePick {
 export const pickUniverse = (thesis: string, subIndustries: string[], symbols: string[]) =>
   askJson<UniversePick>(
     `${BASE}\nYour role: Screening analyst. The investable universe is the S&P 500. Map the thesis onto it using ONLY the sub-industries and tickers provided.`,
-    `Thesis: ${thesis}\n\nReturn JSON: {"subIndustries":["exact names from the list, as many as the thesis plausibly touches"],"tickers":["optional S&P 500 tickers you are sure belong, even if their sub-industry is not listed"],"marketCapMin":number|null,"marketCapMax":number|null,"rationale":"2 sentences"}. Set market cap bounds in US dollars only if the thesis implies a size (for example "outside the megacaps" means a ceiling around 300000000000). Otherwise null.\n\nSub-industries:\n${subIndustries.join("\n")}\n\nTickers:\n${symbols.join(" ")}`,
+    `Thesis: ${thesis}\n\nReturn JSON: {"subIndustries":["exact names from the list, as many as the thesis plausibly touches"],"tickers":["optional S&P 500 tickers you are sure belong, even if their sub-industry is not listed"],"marketCapMin":number|null,"marketCapMax":number|null,"rationale":"2 sentences"}. Set market cap bounds in US dollars only if the thesis implies a size (for example "outside the megacaps" means a ceiling around 100000000000). Otherwise null.\n\nSub-industries:\n${subIndustries.join("\n")}\n\nTickers:\n${symbols.join(" ")}`,
+  );
+
+/** Cheap relevance pass before the numeric ranking: how directly does each company benefit from the thesis? */
+export const fitScreen = (thesis: string, companies: { symbol: string; name: string; subIndustry: string; marketCapB: number }[]) =>
+  askJson<{ fits: { symbol: string; fit: number }[] }>(
+    `${BASE}\nYour role: Screening analyst. Rate only how directly each company benefits from the thesis. Sector is irrelevant; a utility or industrial can score 10 if the link is real and specific, and a tech company scores low if the link is vague.`,
+    `Thesis: ${thesis}\n\nReturn JSON: {"fits":[{"symbol":"","fit":<1-10>}]} for EVERY company below. 10 = core beneficiary with a specific, material link, 6 = real but secondary link, 3 = loosely related, 1 = unrelated.\n\n${companies.map((c) => `${c.symbol} | ${c.name} | ${c.subIndustry} | $${c.marketCapB}B`).join("\n")}`,
+    4000,
   );
 
 export interface Construction {
@@ -95,6 +103,7 @@ export const riskCommentary = (thesis: string, metrics: unknown) =>
 
 export interface StockThesis extends Memo {
   stance: "bullish" | "bearish" | "neutral";
+  thesisFit: number;
   fairValueLow: number | null;
   fairValueHigh: number | null;
   catalysts: string[];
@@ -105,10 +114,11 @@ export interface StockThesis extends Memo {
 export const stockThesis = async (thesis: string, data: unknown): Promise<StockThesis> => {
   const t = await askJson<StockThesis & { conviction?: number }>(
     `${BASE}\nYour role: Lead analyst. Merge the fundamentals, valuation, sentiment and devil's advocate memos into a single investment thesis for this stock, and say what would prove it wrong.`,
-    `Portfolio thesis: ${thesis}\n\nReturn JSON: {"stance":"bullish|bearish|neutral","verdict":"short label","conviction":<1-10>,"summary":"3-4 sentences: why, citing the memos","fairValueLow":number|null,"fairValueHigh":number|null,"catalysts":["what could move the price toward fair value"],"invalidation":["specific, observable events or price levels that would break the thesis"]}.\nFair value must come from the provided DCF range, multiples or analyst targets; use null if the data does not support one. A bearish stance needs a real overvaluation or deterioration case, not just a strong bear memo.\n\n${JSON.stringify(data).slice(0, 20_000)}`,
+    `Portfolio thesis: ${thesis}\n\nReturn JSON: {"stance":"bullish|bearish|neutral","verdict":"short label","conviction":<1-10>,"thesisFit":<1-10>,"summary":"3-4 sentences: why, citing the memos","fairValueLow":number|null,"fairValueHigh":number|null,"catalysts":["what could move the price toward fair value"],"invalidation":["specific, observable events or price levels that would break the thesis"]}.\nFair value must come from the provided DCF range, multiples or analyst targets; use null if the data does not support one. thesisFit rates how directly this company benefits from the portfolio thesis (10 = a core beneficiary, 5 = loosely related, 1 = unrelated); sector does not matter, only whether the link is real and specific. A bearish stance needs a real overvaluation or deterioration case, not just a strong bear memo. screening_side is only the quantitative screen's prior (long = strong metrics, short = weak or stretched); weigh the evidence and commit to \"bullish\" or \"bearish\" whenever the memos lean one way. Use \"neutral\" only when the evidence is genuinely balanced, which should be rare.\n\n${JSON.stringify(data).slice(0, 20_000)}`,
   );
   t.stance = ["bullish", "bearish", "neutral"].includes(t.stance) ? t.stance : "neutral";
   t.score = Math.min(10, Math.max(1, Number(t.conviction) || 5));
+  t.thesisFit = Math.min(10, Math.max(1, Number(t.thesisFit) || 5));
   t.points = [
     ...(t.fairValueLow && t.fairValueHigh ? [`Fair value range: $${Number(t.fairValueLow).toFixed(2)} to $${Number(t.fairValueHigh).toFixed(2)}`] : []),
     ...(t.catalysts ?? []).map((c) => `Catalyst: ${c}`),

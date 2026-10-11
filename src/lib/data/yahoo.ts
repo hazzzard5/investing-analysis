@@ -52,13 +52,24 @@ export const yahoo: DataProvider = {
     const f = s.financialData ?? {};
     const k = s.defaultKeyStatistics ?? {};
     const d = s.summaryDetail ?? {};
+    const gross = num(f.grossMargins);
+    let operating = num(f.operatingMargins);
+    const dataWarnings: string[] = [];
+    // Operating margin cannot exceed gross margin; Yahoo mixes periods sometimes. Drop it rather than trust it.
+    if (gross != null && operating != null && operating > gross + 0.001) {
+      dataWarnings.push(`Yahoo operating margin (${(operating * 100).toFixed(0)}%) exceeds gross margin (${(gross * 100).toFixed(0)}%), so it was ignored.`);
+      operating = null;
+    }
+    const profit = num(f.profitMargins);
+    if (profit != null && profit < -1) dataWarnings.push(`Yahoo profit margin is ${(profit * 100).toFixed(0)}%, likely a one-off charge; treat with caution.`);
     return {
+      dataWarnings,
       price: num(f.currentPrice),
       revenue: num(f.totalRevenue),
       revenueGrowth: num(f.revenueGrowth),
       earningsGrowth: num(f.earningsGrowth),
-      grossMargin: num(f.grossMargins),
-      operatingMargin: num(f.operatingMargins),
+      grossMargin: gross,
+      operatingMargin: operating,
       profitMargin: num(f.profitMargins),
       roe: num(f.returnOnEquity),
       freeCashflow: num(f.freeCashflow),

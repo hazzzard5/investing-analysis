@@ -30,3 +30,13 @@ test("names with too little data are skipped", () => {
   const r = rankCandidates([sparse, ...Array.from({ length: 10 }, (_, i) => m(`T${i}`, i))], 5);
   assert.ok(!r.some((x) => x.symbol === "X"));
 });
+
+test("rankCandidates keeps one sub-industry from taking every long slot", () => {
+  const all = [
+    ...Array.from({ length: 6 }, (_, i) => ({ ...m(`A${i}`, 5 - i * 0.1), group: "Semis" })),
+    ...Array.from({ length: 4 }, (_, i) => ({ ...m(`B${i}`, 2 - i * 0.1), group: "Utilities" })),
+  ];
+  const longs = rankCandidates(all, 6).filter((r) => r.side === "long");
+  assert.ok(longs.filter((r) => r.symbol.startsWith("A")).length <= 3);
+  assert.ok(longs.some((r) => r.symbol.startsWith("B")));
+});

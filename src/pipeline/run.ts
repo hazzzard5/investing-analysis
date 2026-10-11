@@ -50,7 +50,7 @@ export async function runPipeline(runId: string): Promise<void> {
     const amount = Number(run.amount);
     const maxWeight = Number(run.max_weight);
     const minHoldings = Number(run.min_holdings);
-    const candidates = Math.max(minHoldings, Number(run.candidates ?? 15));
+    const candidates = Math.max(minHoldings, Number(run.candidates ?? 8));
 
     await sql`update runs set status = 'running', started_at = now(), error = null where id = ${runId}`;
 
@@ -80,7 +80,9 @@ export async function runPipeline(runId: string): Promise<void> {
         data.prices(u.symbol).catch(() => [] as Series),
       ]);
       if (p && hist.length > 60) cache.set(u.symbol, { p, fund, hist });
+      else console.warn(`screening: no usable data for ${u.symbol} (profile ${p ? "ok" : "missing"}, ${hist.length} price points)`);
     });
+    const subIndustryOf = new Map(universe.map((u) => [u.symbol, u.subIndustry]));
     const metrics: Metrics[] = [...cache.entries()]
       .filter(([, c]) => (!pick.marketCapMin || c.p.marketCap >= pick.marketCapMin) && (!pick.marketCapMax || c.p.marketCap <= pick.marketCapMax))
       .map(([symbol, c]) => {
@@ -97,22 +99,34 @@ export async function runPipeline(runId: string): Promise<void> {
           pe: c.fund.trailingPE && c.fund.trailingPE > 0 ? c.fund.trailingPE : null,
           debtToEquity: c.fund.debtToEquity ?? null,
           extension: t?.pctFromSma200 ?? null,
+          group: subIndustryOf.get(symbol),
         };
       });
-    const ranked = rankCandidates(metrics, candidates);
+    // Relevance first: only companies that really benefit from the thesis go through the numeric ranking.
+    const fitRes = await agents
+      .fitScreen(thesis, metrics.map((m) => ({ symbol: m.symbol, name: cache.get(m.symbol)!.p.name, subIndustry: subIndustryOf.get(m.symbol) ?? "", marketCapB: Math.round((m.marketCap ?? 0) / 1e9) })))
+      .catch((e) => {
+        console.error("fit screen failed:", e instanceof Error ? e.message : e);
+        return { fits: [] };
+      });
+    const fitOf = new Map((fitRes.fits ?? []).map((f) => [String(f.symbol).toUpperCase(), Number(f.fit)]));
+    let relevant = metrics.filter((m) => (fitOf.get(m.symbol) ?? 0) >= 6);
+    if (relevant.length < candidates * 1.5) relevant = metrics.filter((m) => (fitOf.get(m.symbol) ?? 0) >= 5);
+    const screened = relevant.length >= candidates ? relevant : metrics; // no usable fit scores: fall back to the old behaviour
+    const ranked = rankCandidates(screened, candidates);
     if (ranked.length < minHoldings) throw new Error(`Only ${ranked.length} rankable S&P 500 candidates found for this thesis; need at least ${minHoldings}`);
     const profiles = ranked.map((r) => ({ s: r.symbol, p: cache.get(r.symbol)!.p, side: r.side, score: r.score }));
     await saveMemo(runId, "screening", null, {
       verdict: `${profiles.length} of ${metrics.length} ranked`,
       score: 5,
-      summary: `${pick.rationale} Pool: ${pool_.length} S&P 500 names in ${[...wanted].join(", ") || "named tickers"}; ${metrics.length} had usable data. Ranked on growth, margins, FCF yield, momentum, valuation and leverage; the top ${candidates - Math.floor(candidates * 0.3)} become long candidates and the weakest/most stretched ${Math.floor(candidates * 0.3)} short candidates.`,
+      summary: `${pick.rationale} Pool: ${pool_.length} S&P 500 names in ${[...wanted].join(", ") || "named tickers"}; ${cache.size} of ${pool_.length} returned data and ${metrics.length} passed the size limit; ${screened === metrics ? "relevance scoring was unavailable" : `${screened.length} scored as relevant to the thesis`}. Ranked on growth, margins, FCF yield, momentum, valuation and leverage; the top ${candidates - Math.floor(candidates * 0.3)} become long candidates and the weakest/most stretched ${Math.floor(candidates * 0.3)} short candidates.`,
       points: profiles.map((x) => `${x.s} ${x.side} (score ${x.score.toFixed(2)}): ${x.p.name}, ${x.p.sector}, mkt cap $${Math.round(x.p.marketCap / 1e9)}B`),
     });
 
     // 2. Per-company analysis: fundamentals, valuation, sentiment, then devil's advocate
     await stage(runId, "analysis");
     const macro = await macroSnapshot();
-    const analysed = await pool(profiles, async ({ s, p }) => {
+    const analysed = await pool(profiles, async ({ s, p, side }) => {
       const { fund, hist } = cache.get(s)!;
       const n = await data.news(s).catch(() => []);
       const tech = technicals(hist);
@@ -131,6 +145,7 @@ export async function runPipeline(runId: string): Promise<void> {
       ]);
       const th = await agents.stockThesis(thesis, {
         ticker: s,
+        screening_side: side,
         last_price: p.price,
         dcf: dcfValue,
         analyst_target_mean: (fund as any).analystTargetMean ?? null,
@@ -146,7 +161,10 @@ export async function runPipeline(runId: string): Promise<void> {
           technicals: tech,
           macro,
         })
-        .catch(() => null);
+        .catch((e) => {
+          console.error(`trade idea failed for ${s}:`, e instanceof Error ? e.message : e);
+          return null;
+        });
       const idea = validateIdea(rawIdea, p.price, th);
       if (idea) {
         await sql`insert into trade_ideas (run_id, ticker, direction, entry, target, stop, reward_risk, last_price, horizon, condition, rationale, confidence, stance, thesis, entry_basis, target_basis, stop_basis, invalidation)
@@ -154,7 +172,7 @@ export async function runPipeline(runId: string): Promise<void> {
       }
       // Composite 1-10: bear-case strength counts against the stock.
       const composite = (f.score + v.score + ns.score + (11 - da.score)) / 4;
-      return { ticker: s, profile: p, price: Number(p.price), hist, composite, f, v, ns, da };
+      return { ticker: s, side, stance: th.stance, fit: th.thesisFit, profile: p, price: Number(p.price), hist, composite, f, v, ns, da };
     });
 
     // 3. Risk (computed in code from price history)
@@ -174,25 +192,35 @@ export async function runPipeline(runId: string): Promise<void> {
 
     // 4. Portfolio construction
     await stage(runId, "portfolio");
-    const summaries = usable.map((a) => ({
+    // The proposed portfolio is long-only: short candidates and bearish theses appear as trade ideas, not holdings.
+    // Only names that fit the thesis (fit >= 6) are held. Bullish names first; neutral names fill any shortfall.
+    const fits = usable.filter((a) => a.stance !== "bearish" && a.fit >= 6);
+    let eligible = fits.filter((a) => a.side === "long" && a.stance === "bullish");
+    if (eligible.length < minHoldings) eligible = [...eligible, ...fits.filter((a) => !eligible.includes(a)).sort((a, b) => b.composite - a.composite)];
+    if (eligible.length < minHoldings) eligible = usable.filter((a) => a.stance !== "bearish" && a.side === "long");
+    if (eligible.length < minHoldings) eligible = usable.filter((a) => a.stance !== "bearish");
+    if (eligible.length < minHoldings) eligible = usable;
+    const summaries = eligible.map((a) => ({
       ticker: a.ticker,
       name: a.profile.name,
       sector: a.profile.sector,
+      stance: a.stance,
+      thesis_fit: a.fit,
       composite: Number(a.composite.toFixed(2)),
       fundamentals: a.f.verdict,
       valuation: a.v.verdict,
       sentiment: a.ns.verdict,
       bear_case: a.da.summary,
     }));
-    const byTicker = new Map(usable.map((a) => [a.ticker, a]));
+    const byTicker = new Map(eligible.map((a) => [a.ticker, a]));
     let picks = (await agents.construct(thesis, { maxWeight, minHoldings }, summaries).catch(() => ({ picks: [] }))).picks
       .map((p) => ({ ...p, ticker: String(p.ticker).toUpperCase() }))
       .filter((p, i, all) => byTicker.has(p.ticker) && all.findIndex((x) => x.ticker === p.ticker) === i);
     // Fall back to top composite scores if the model picked too few valid names.
     if (picks.length < minHoldings) {
-      picks = [...usable]
+      picks = [...eligible]
         .sort((a, b) => b.composite - a.composite)
-        .slice(0, Math.max(minHoldings, Math.min(8, usable.length)))
+        .slice(0, Math.max(minHoldings, Math.min(8, eligible.length)))
         .map((a) => ({ ticker: a.ticker, weight: a.composite, rationale: "Top composite analyst score." }));
     }
     // Enforce rules in code, whatever the model returned.
@@ -241,7 +269,7 @@ export async function runPipeline(runId: string): Promise<void> {
       top_sector: topSector,
       holdings: held.map((h) => ({ ticker: h.ticker, weight: h.weight, sector: h.sector })),
       benchmark_spy: { volatility: spyVol, max_drawdown_1y: spyDD },
-      note: "Drawdown and volatility are backward-looking over about one year.",
+      note: "Drawdown and volatility are backward-looking over about one year." + (topSectorWeight > 0.5 ? ` Concentration warning: ${(topSectorWeight * 100).toFixed(0)}% of the portfolio is in ${topSector}. Say what that means for risk.` : ""),
     });
     await saveMemo(runId, "risk", null, rm);
     await saveMemo(runId, "portfolio", null, {
@@ -261,7 +289,7 @@ export async function runPipeline(runId: string): Promise<void> {
 
 export async function createRun(input: { text: string; amount: number; maxWeight: number; minHoldings: number; candidates?: number }) {
   const [t] = await sql`insert into theses (text, amount, max_weight, min_holdings, candidates)
-                        values (${input.text}, ${input.amount}, ${input.maxWeight}, ${input.minHoldings}, ${input.candidates ?? 15}) returning id`;
+                        values (${input.text}, ${input.amount}, ${input.maxWeight}, ${input.minHoldings}, ${input.candidates ?? 8}) returning id`;
   const [r] = await sql`insert into runs (thesis_id) values (${t.id}) returning id`;
   return r.id as string;
 }
