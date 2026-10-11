@@ -91,7 +91,4 @@ export const yahoo: DataProvider = {
     );
   },
 
-  async screen() {
-    return []; // candidates come from the screening agent's ideas, validated via profile()
-  },
 };

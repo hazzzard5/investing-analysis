@@ -60,22 +60,19 @@ export const devilsAdvocate = (thesis: string, data: unknown) =>
     data,
   );
 
-export interface ScreenPlan {
-  criteria: {
-    sector?: string;
-    industry?: string;
-    marketCapMoreThan?: number;
-    marketCapLowerThan?: number;
-    exchange?: string;
-  };
+export interface UniversePick {
+  subIndustries: string[];
   tickers: string[];
+  marketCapMin?: number;
+  marketCapMax?: number;
   rationale: string;
 }
 
-export const planScreen = (thesis: string) =>
-  askJson<ScreenPlan>(
-    `${BASE}\nYour role: Screening analyst. Turn the thesis into FMP stock-screener criteria and propose candidate US-listed tickers from your own knowledge.`,
-    `Thesis: ${thesis}\n\nReturn JSON: {"criteria":{"sector":"optional FMP sector name","industry":"optional FMP industry name","marketCapMoreThan":number,"marketCapLowerThan":number,"exchange":"optional e.g. NASDAQ"},"tickers":["up to 15 tickers"],"rationale":"2 sentences"}. Respect exclusions in the thesis (for example "outside the megacaps" means a market cap ceiling).`,
+/** Screening analyst: choose which part of the S&P 500 the thesis is about. Code does the actual filtering and ranking. */
+export const pickUniverse = (thesis: string, subIndustries: string[], symbols: string[]) =>
+  askJson<UniversePick>(
+    `${BASE}\nYour role: Screening analyst. The investable universe is the S&P 500. Map the thesis onto it using ONLY the sub-industries and tickers provided.`,
+    `Thesis: ${thesis}\n\nReturn JSON: {"subIndustries":["exact names from the list, as many as the thesis plausibly touches"],"tickers":["optional S&P 500 tickers you are sure belong, even if their sub-industry is not listed"],"marketCapMin":number|null,"marketCapMax":number|null,"rationale":"2 sentences"}. Set market cap bounds in US dollars only if the thesis implies a size (for example "outside the megacaps" means a ceiling around 300000000000). Otherwise null.\n\nSub-industries:\n${subIndustries.join("\n")}\n\nTickers:\n${symbols.join(" ")}`,
   );
 
 export interface Construction {
@@ -126,4 +123,19 @@ export const tradeIdea = (thesis: string, data: unknown) =>
   askJson<import("../lib/tradeIdeas").RawIdea & { direction: string }>(
     `${BASE}\nYour role: Trade-setup analyst. Turn the lead analyst's stock thesis into at most one paper-trading setup, or none. Data is delayed by about a day, so levels are zones, not live triggers.`,
     `Portfolio thesis: ${thesis}\n\nThe stock_thesis in the data is the basis for everything. Derive the levels from it:\n- direction must match its stance: bullish gives "long", bearish gives "short", neutral gives "none".\n- entry: a zone justified by the thesis fair value (a discount to it) and, for timing, the technicals (pullback to a moving average, overextension).\n- target: at or below the thesis fair value for a long; at or above it for a short. Name the fair value you used.\n- stop: a price that invalidates the thesis, tied to one of its invalidation points or a technical level behind the entry.\n- Shorts also need overextension or deteriorating fundamentals plus supportive macro; mention borrow cost and squeeze risk.\nReturn JSON: {"direction":"long|short|none","entry":number,"target":number,"stop":number,"entry_basis":"why this entry, citing the thesis and data","target_basis":"which fair value or target","stop_basis":"which invalidation point","horizon":"e.g. 1-3 months","condition":"what must happen before acting","rationale":"2 sentences","confidence":<1-10>}. Prices use the same units as last_price.\n\n${JSON.stringify(data).slice(0, 20_000)}`,
+  );
+
+export interface ThesisCheck {
+  verdict: "intact" | "weakened" | "invalidated";
+  reason: string;
+}
+
+/**
+ * Reviews a frozen thesis after a dramatic event. It can only judge the ORIGINAL thesis against what happened;
+ * it never writes a new one. Ordinary volatility is not a reason to change anything.
+ */
+export const thesisCheck = (frozen: unknown, event: unknown) =>
+  askJson<ThesisCheck>(
+    `${BASE}\nYour role: Thesis reviewer. A trade idea was written with a fixed thesis and fixed invalidation points. Decide only whether what just happened has broken that original thesis.`,
+    `Verdict rules: "invalidated" only if an invalidation point was clearly hit or the event dramatically undermines the core reasoning (for example fraud, a failed deal, a guidance collapse, a regulatory ban). "weakened" if it matters but the thesis can still play out. Otherwise "intact"; a big price move on its own does not invalidate a thesis. Default to "intact" when unsure.\nReturn JSON: {"verdict":"intact|weakened|invalidated","reason":"2 sentences citing the event"}.\n\nFrozen thesis:\n${JSON.stringify(frozen)}\n\nEvent:\n${JSON.stringify(event).slice(0, 12_000)}`,
   );

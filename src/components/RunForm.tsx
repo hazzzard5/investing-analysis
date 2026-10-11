@@ -20,6 +20,7 @@ export default function RunForm() {
         amount: Number(f.get("amount")),
         maxWeight: Number(f.get("maxPct")) / 100,
         minHoldings: Number(f.get("minHoldings")),
+        candidates: Number(f.get("candidates")),
       }),
     });
     const body = await res.json();
@@ -49,6 +50,10 @@ export default function RunForm() {
         <label>
           Min holdings
           <input name="minHoldings" type="number" min="1" defaultValue={5} required />
+        </label>
+        <label>
+          Stocks to analyse in depth
+          <input name="candidates" type="number" min="5" max="40" defaultValue={15} required />
         </label>
       </div>
       <button disabled={busy}>{busy ? "Starting…" : "Run research"}</button>

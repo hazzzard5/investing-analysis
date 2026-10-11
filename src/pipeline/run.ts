@@ -2,6 +2,8 @@ import { sql } from "../lib/db";
 import { data, type Profile } from "../lib/data";
 import { macroSnapshot } from "../lib/macro";
 import { technicals } from "../lib/technicals";
+import { rankCandidates, type Metrics } from "../lib/ranking";
+import { loadUniverse } from "../lib/universe";
 import { validateIdea } from "../lib/tradeIdeas";
 import { dcf } from "../lib/valuation";
 import { annualVol, capWeights, correlation, maxDrawdown, portfolioPath, type Series } from "../lib/stats";
@@ -9,7 +11,7 @@ import * as agents from "./agents";
 import { memoMarkdown, type Memo } from "./agents";
 
 const CONCURRENCY = 3;
-const MAX_CANDIDATES = 12;
+const SCREEN_POOL = 80; // max S&P 500 names we pull data for per run
 
 async function pool<T, R>(items: T[], fn: (x: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -41,43 +43,78 @@ async function saveMemo(runId: string, agent: string, ticker: string | null, m: 
 export async function runPipeline(runId: string): Promise<void> {
   try {
     const [run] = await sql`
-      select r.id, t.text, t.amount, t.max_weight, t.min_holdings
+      select r.id, t.text, t.amount, t.max_weight, t.min_holdings, t.candidates
       from runs r join theses t on t.id = r.thesis_id where r.id = ${runId}`;
     if (!run) throw new Error(`run ${runId} not found`);
     const thesis: string = run.text;
     const amount = Number(run.amount);
     const maxWeight = Number(run.max_weight);
     const minHoldings = Number(run.min_holdings);
+    const candidates = Math.max(minHoldings, Number(run.candidates ?? 15));
 
     await sql`update runs set status = 'running', started_at = now(), error = null where id = ${runId}`;
 
-    // 1. Screening
+    // 1. Screening: thesis -> relevant S&P 500 industries -> quantitative ranking -> top candidates
     await stage(runId, "screening");
-    const plan = await agents.planScreen(thesis);
-    const screened = await data.screen(plan.criteria).catch(() => [] as string[]);
-    const symbols = [
-      ...new Set([...(plan.tickers ?? []), ...screened].map((s) => String(s).toUpperCase())),
-    ];
-    const profiles = (await pool(symbols.slice(0, 30), async (s) => ({ s, p: await data.profile(s).catch(() => null) })))
-      .filter((x): x is { s: string; p: Profile } => x.p !== null)
-      .slice(0, MAX_CANDIDATES);
-    if (profiles.length < minHoldings) throw new Error(`Only ${profiles.length} usable candidates found; need at least ${minHoldings}`);
+    const universe = loadUniverse();
+    const pick = await agents.pickUniverse(
+      thesis,
+      [...new Set(universe.map((u) => u.subIndustry))].sort(),
+      universe.map((u) => u.symbol),
+    );
+    const wanted = new Set(pick.subIndustries ?? []);
+    const named = new Set((pick.tickers ?? []).map((t) => String(t).toUpperCase().replace(".", "-")));
+    let pool_ = universe.filter((u) => wanted.has(u.subIndustry) || named.has(u.symbol));
+    if (pool_.length < candidates * 2) {
+      const sectors = new Set(pool_.map((u) => u.sector));
+      pool_ = sectors.size ? universe.filter((u) => sectors.has(u.sector) || named.has(u.symbol)) : universe;
+    }
+    // Named tickers first, then the rest; cap how many we fetch data for.
+    pool_ = [...pool_.filter((u) => named.has(u.symbol)), ...pool_.filter((u) => !named.has(u.symbol))].slice(0, SCREEN_POOL);
+
+    const cache = new Map<string, { p: Profile; fund: Record<string, any>; hist: Series }>();
+    await pool(pool_, async (u) => {
+      const [p, fund, hist] = await Promise.all([
+        data.profile(u.symbol).catch(() => null),
+        data.fundamentals(u.symbol).catch(() => ({}) as Record<string, any>),
+        data.prices(u.symbol).catch(() => [] as Series),
+      ]);
+      if (p && hist.length > 60) cache.set(u.symbol, { p, fund, hist });
+    });
+    const metrics: Metrics[] = [...cache.entries()]
+      .filter(([, c]) => (!pick.marketCapMin || c.p.marketCap >= pick.marketCapMin) && (!pick.marketCapMax || c.p.marketCap <= pick.marketCapMax))
+      .map(([symbol, c]) => {
+        const closes = c.hist.map((x) => x.close);
+        const mom = closes.length > 230 ? closes.at(-21)! / closes[0] - 1 : null;
+        const t = technicals(c.hist);
+        return {
+          symbol,
+          marketCap: c.p.marketCap || null,
+          revenueGrowth: c.fund.revenueGrowth ?? null,
+          operatingMargin: c.fund.operatingMargin ?? null,
+          fcfYield: c.fund.freeCashflow && c.p.marketCap ? c.fund.freeCashflow / c.p.marketCap : null,
+          momentum: mom,
+          pe: c.fund.trailingPE && c.fund.trailingPE > 0 ? c.fund.trailingPE : null,
+          debtToEquity: c.fund.debtToEquity ?? null,
+          extension: t?.pctFromSma200 ?? null,
+        };
+      });
+    const ranked = rankCandidates(metrics, candidates);
+    if (ranked.length < minHoldings) throw new Error(`Only ${ranked.length} rankable S&P 500 candidates found for this thesis; need at least ${minHoldings}`);
+    const profiles = ranked.map((r) => ({ s: r.symbol, p: cache.get(r.symbol)!.p, side: r.side, score: r.score }));
     await saveMemo(runId, "screening", null, {
-      verdict: `${profiles.length} candidates`,
+      verdict: `${profiles.length} of ${metrics.length} ranked`,
       score: 5,
-      summary: plan.rationale,
-      points: profiles.map((x) => `${x.s}: ${x.p.name} (${x.p.sector}, mkt cap ${Math.round(x.p.marketCap / 1e6)}M)`),
+      summary: `${pick.rationale} Pool: ${pool_.length} S&P 500 names in ${[...wanted].join(", ") || "named tickers"}; ${metrics.length} had usable data. Ranked on growth, margins, FCF yield, momentum, valuation and leverage; the top ${candidates - Math.floor(candidates * 0.3)} become long candidates and the weakest/most stretched ${Math.floor(candidates * 0.3)} short candidates.`,
+      points: profiles.map((x) => `${x.s} ${x.side} (score ${x.score.toFixed(2)}): ${x.p.name}, ${x.p.sector}, mkt cap $${Math.round(x.p.marketCap / 1e9)}B`),
     });
 
     // 2. Per-company analysis: fundamentals, valuation, sentiment, then devil's advocate
     await stage(runId, "analysis");
     const macro = await macroSnapshot();
     const analysed = await pool(profiles, async ({ s, p }) => {
-      const [fund, hist, n] = await Promise.all([
-        data.fundamentals(s).catch(() => ({}) as Record<string, any>),
-        data.prices(s).catch(() => [] as Series),
-        data.news(s).catch(() => []),
-      ]);
+      const { fund, hist } = cache.get(s)!;
+      const n = await data.news(s).catch(() => []);
       const tech = technicals(hist);
       const dcfValue = dcf(fund as any);
       const [f, v, ns] = await Promise.all([
@@ -222,9 +259,9 @@ export async function runPipeline(runId: string): Promise<void> {
   }
 }
 
-export async function createRun(input: { text: string; amount: number; maxWeight: number; minHoldings: number }) {
-  const [t] = await sql`insert into theses (text, amount, max_weight, min_holdings)
-                        values (${input.text}, ${input.amount}, ${input.maxWeight}, ${input.minHoldings}) returning id`;
+export async function createRun(input: { text: string; amount: number; maxWeight: number; minHoldings: number; candidates?: number }) {
+  const [t] = await sql`insert into theses (text, amount, max_weight, min_holdings, candidates)
+                        values (${input.text}, ${input.amount}, ${input.maxWeight}, ${input.minHoldings}, ${input.candidates ?? 15}) returning id`;
   const [r] = await sql`insert into runs (thesis_id) values (${t.id}) returning id`;
   return r.id as string;
 }

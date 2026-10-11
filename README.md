@@ -8,12 +8,17 @@ A multi-agent research and paper-portfolio dashboard. You enter a thesis and an 
 
 `src/pipeline/run.ts` runs one thesis end to end. The same function is called by the dashboard button, the CLI and (later) a scheduler.
 
-1. Screening: thesis to criteria plus candidate tickers (validated against the data provider).
-2. Per company: fundamentals, valuation (a transparent DCF computed in code, plus multiples), news and sentiment, a devil's advocate that argues against it, and a trade-setup analyst (below).
-3. Risk, computed in code from about a year of prices: volatility, drawdown, pairwise correlation, sector concentration.
-4. Portfolio construction: the model picks names and weights, then code enforces your rules (max weight per stock, min holdings).
-5. Per-stock thesis, then trade ideas: a lead analyst merges the fundamentals, valuation, sentiment and devil's advocate memos into one thesis (stance, fair-value range, catalysts, what would invalidate it). Trade levels must come from that thesis: direction follows the stance, the target stays within the thesis fair value, and the stop ties to an invalidation point. Technicals set the timing. Setups use technicals (overextension from RSI and distance from the 200-day average), valuation and the macro backdrop (Fed funds, 2y/10y, curve, VIX, credit spreads). Code rejects incoherent levels (wrong side of entry, reward/risk under 1.5, entry far from price). Research for paper tracking only; shorts ignore borrow cost and squeeze risk.
-6. You press "Start paper tracking"; a daily snapshot job records portfolio value next to SPY.
+1. Screening (S&P 500 only): an agent maps the thesis onto S&P 500 sub-industries (and any size limit it implies, such as "outside the megacaps"). Code pulls data for up to 80 matching names and ranks them on growth, margins, FCF yield, momentum, valuation and leverage. The top 70% of the "stocks to analyse" count become long candidates and the weakest or most stretched 30% short candidates. The constituent list is a snapshot in `data/sp500.csv` (`npm run universe:refresh` updates it).
+2. Per company: fundamentals, valuation (a transparent DCF computed in code, plus multiples), news and sentiment, and a devil's advocate that argues against it.
+3. Per-stock thesis: a lead analyst merges those memos into one thesis (stance, fair-value range, catalysts, what would invalidate it).
+4. Risk, computed in code from about a year of prices: volatility, drawdown, pairwise correlation, sector concentration.
+5. Portfolio construction: the model picks names and weights, then code enforces your rules (max weight per stock, min holdings).
+6. Trade ideas: entry, target and stop derived from the thesis (direction follows the stance, target stays within the fair value, stop ties to an invalidation point), with technicals and macro (Fed funds, 2y/10y, curve, VIX, credit spreads) for timing. Code rejects incoherent levels. Research for paper tracking only; shorts ignore borrow cost and squeeze risk.
+7. You press "Start paper tracking" on the portfolio if you want it tracked against SPY.
+
+## Frozen theses and the tracker
+
+A thesis is written once and not regenerated, so you can see whether the original call plays out. After a run, each trade idea is tracked from its creation (`/tracker`): waiting for entry, open, target hit, stopped out, never filled, expired (30 days unfilled or 180 days open), or invalidated. `npm run monitor` checks active ideas against new daily closes using plain rules, with no model calls. A model is used only when an active idea has a dramatic one-day move (at least 7% and 3 standard deviations); it then judges the original thesis against what happened and can mark it invalidated, but it can never rewrite it. Results are shown next to the S&P 500 over the same period. Run `npm run monitor` as often as you like (daily or weekly); repeat runs on the same data change nothing.
 
 ## Run it locally
 
@@ -36,10 +41,10 @@ Daily-lagged data is fine; nothing is real time. `DATA_PROVIDER=yahoo` (default)
 
 ```bash
 npm run run:pipeline -- "AI infrastructure beneficiaries outside the megacaps" 10000
-npm run snapshot              # record today's paper-portfolio value vs SPY
+npm run monitor               # advance trade ideas and record paper-portfolio value vs SPY
 ```
 
-Schedule `npm run snapshot` daily (cron, launchd, Task Scheduler). When deployed, call `GET /api/cron/snapshot` with `Authorization: Bearer $CRON_SECRET`.
+`npm run run:pipeline` starts a new thesis (ad hoc or from a scheduler). Schedule `npm run monitor` (it also records paper-portfolio snapshots) with cron, launchd or Task Scheduler. When deployed, call `GET /api/cron/monitor` with `Authorization: Bearer $CRON_SECRET`.
 
 ## Deploying later (Vercel + hosted Supabase)
 
@@ -47,4 +52,4 @@ Set `ANTHROPIC_API_KEY` (and `FMP_API_KEY` if using FMP), `DATABASE_URL` (Supaba
 
 ## Tests
 
-`npm test` covers the risk math, weight caps, DCF, technicals and trade-idea validation. The pipeline was exercised end to end against a scratch Postgres with mocked FMP and model responses; it has not yet been run against live Yahoo, FRED or model output.
+`npm test` covers the risk math, weight caps, DCF, technicals, S&P 500 ranking, trade-idea validation and the idea lifecycle. The pipeline was exercised end to end against a scratch Postgres with mocked FMP and model responses; it has not yet been run against live Yahoo, FRED or model output.

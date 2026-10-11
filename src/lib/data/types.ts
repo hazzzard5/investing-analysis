@@ -27,6 +27,4 @@ export interface DataProvider {
   /** Key ratios, growth, margins, cash flow and debt as a flat-ish object, plus raw inputs for the DCF. */
   fundamentals(symbol: string): Promise<Record<string, any>>;
   news(symbol: string): Promise<NewsItem[]>;
-  /** Optional: screen by criteria. Providers without a screener return []. */
-  screen(criteria: Record<string, any>): Promise<string[]>;
 }

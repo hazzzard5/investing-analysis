@@ -11,7 +11,9 @@
     "test": "tsx --test src/**/*.test.ts",
     "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
     "run:pipeline": "tsx --env-file=.env scripts/run.ts",
-    "snapshot": "tsx --env-file=.env scripts/snapshot.ts"
+    "snapshot": "tsx --env-file=.env scripts/snapshot.ts",
+    "monitor": "tsx --env-file=.env scripts/monitor.ts",
+    "universe:refresh": "curl -fsSL https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv -o data/sp500.csv"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",

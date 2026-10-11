@@ -125,7 +125,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
           </p>
           <table>
             <thead>
-              <tr><th>Stock</th><th>Side</th><th className="num">Last</th><th className="num">Entry</th><th className="num">Target</th><th className="num">Stop</th><th className="num">R:R</th><th className="num">Conf.</th></tr>
+              <tr><th>Stock</th><th>Side</th><th className="num">Last</th><th className="num">Entry</th><th className="num">Target</th><th className="num">Stop</th><th className="num">R:R</th><th className="num">Conf.</th><th>Status</th></tr>
             </thead>
             <tbody>
               {ideas.map((i) => (
@@ -138,6 +138,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
                   <td className="num">${Number(i.stop).toFixed(2)}</td>
                   <td className="num">{Number(i.reward_risk).toFixed(1)}</td>
                   <td className="num">{Number(i.confidence)}/10</td>
+                  <td>{i.status}</td>
                 </tr>
               ))}
             </tbody>

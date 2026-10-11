@@ -45,7 +45,4 @@ export const fmpProvider: DataProvider = {
   async news(symbol) {
     return (await fmp.news(symbol).catch(() => [])).map((x: any) => ({ date: String(x.publishedDate ?? "").slice(0, 10), title: x.title, publisher: x.publisher }));
   },
-  async screen(criteria) {
-    return (await fmp.screener(criteria).catch(() => [])).map((s: any) => String(s.symbol));
-  },
 };

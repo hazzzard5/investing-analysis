@@ -9,6 +9,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <header>
           <Link href="/">Investing Analysis</Link>
+          <Link href="/tracker">Trade tracker</Link>
           <span className="muted">Paper trading only. Research, not financial advice. You make the decisions.</span>
         </header>
         <main>{children}</main>
