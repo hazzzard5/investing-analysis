@@ -75,6 +75,14 @@ export const pickUniverse = (thesis: string, subIndustries: string[], symbols: s
     `Thesis: ${thesis}\n\nReturn JSON: {"subIndustries":["exact names from the list, as many as the thesis plausibly touches"],"tickers":["optional S&P 500 tickers you are sure belong, even if their sub-industry is not listed"],"marketCapMin":number|null,"marketCapMax":number|null,"rationale":"2 sentences"}. Set market cap bounds in US dollars only if the thesis implies a size (for example "outside the megacaps" means a ceiling around 100000000000). Otherwise null.\n\nSub-industries:\n${subIndustries.join("\n")}\n\nTickers:\n${symbols.join(" ")}`,
   );
 
+/** Cheap relevance pass before the numeric ranking: how directly does each company benefit from the thesis? */
+export const fitScreen = (thesis: string, companies: { symbol: string; name: string; subIndustry: string; marketCapB: number }[]) =>
+  askJson<{ fits: { symbol: string; fit: number }[] }>(
+    `${BASE}\nYour role: Screening analyst. Rate only how directly each company benefits from the thesis. Sector is irrelevant; a utility or industrial can score 10 if the link is real and specific, and a tech company scores low if the link is vague.`,
+    `Thesis: ${thesis}\n\nReturn JSON: {"fits":[{"symbol":"","fit":<1-10>}]} for EVERY company below. 10 = core beneficiary with a specific, material link, 6 = real but secondary link, 3 = loosely related, 1 = unrelated.\n\n${companies.map((c) => `${c.symbol} | ${c.name} | ${c.subIndustry} | $${c.marketCapB}B`).join("\n")}`,
+    4000,
+  );
+
 export interface Construction {
   picks: { ticker: string; weight: number; rationale: string }[];
 }

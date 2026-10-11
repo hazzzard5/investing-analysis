@@ -80,6 +80,7 @@ export async function runPipeline(runId: string): Promise<void> {
         data.prices(u.symbol).catch(() => [] as Series),
       ]);
       if (p && hist.length > 60) cache.set(u.symbol, { p, fund, hist });
+      else console.warn(`screening: no usable data for ${u.symbol} (profile ${p ? "ok" : "missing"}, ${hist.length} price points)`);
     });
     const subIndustryOf = new Map(universe.map((u) => [u.symbol, u.subIndustry]));
     const metrics: Metrics[] = [...cache.entries()]
@@ -101,13 +102,24 @@ export async function runPipeline(runId: string): Promise<void> {
           group: subIndustryOf.get(symbol),
         };
       });
-    const ranked = rankCandidates(metrics, candidates);
+    // Relevance first: only companies that really benefit from the thesis go through the numeric ranking.
+    const fitRes = await agents
+      .fitScreen(thesis, metrics.map((m) => ({ symbol: m.symbol, name: cache.get(m.symbol)!.p.name, subIndustry: subIndustryOf.get(m.symbol) ?? "", marketCapB: Math.round((m.marketCap ?? 0) / 1e9) })))
+      .catch((e) => {
+        console.error("fit screen failed:", e instanceof Error ? e.message : e);
+        return { fits: [] };
+      });
+    const fitOf = new Map((fitRes.fits ?? []).map((f) => [String(f.symbol).toUpperCase(), Number(f.fit)]));
+    let relevant = metrics.filter((m) => (fitOf.get(m.symbol) ?? 0) >= 6);
+    if (relevant.length < candidates * 1.5) relevant = metrics.filter((m) => (fitOf.get(m.symbol) ?? 0) >= 5);
+    const screened = relevant.length >= candidates ? relevant : metrics; // no usable fit scores: fall back to the old behaviour
+    const ranked = rankCandidates(screened, candidates);
     if (ranked.length < minHoldings) throw new Error(`Only ${ranked.length} rankable S&P 500 candidates found for this thesis; need at least ${minHoldings}`);
     const profiles = ranked.map((r) => ({ s: r.symbol, p: cache.get(r.symbol)!.p, side: r.side, score: r.score }));
     await saveMemo(runId, "screening", null, {
       verdict: `${profiles.length} of ${metrics.length} ranked`,
       score: 5,
-      summary: `${pick.rationale} Pool: ${pool_.length} S&P 500 names in ${[...wanted].join(", ") || "named tickers"}; ${metrics.length} had usable data. Ranked on growth, margins, FCF yield, momentum, valuation and leverage; the top ${candidates - Math.floor(candidates * 0.3)} become long candidates and the weakest/most stretched ${Math.floor(candidates * 0.3)} short candidates.`,
+      summary: `${pick.rationale} Pool: ${pool_.length} S&P 500 names in ${[...wanted].join(", ") || "named tickers"}; ${metrics.length} of ${pool_.length} had usable data and ${screened === metrics ? "relevance scoring was unavailable" : `${screened.length} scored as relevant to the thesis`}. Ranked on growth, margins, FCF yield, momentum, valuation and leverage; the top ${candidates - Math.floor(candidates * 0.3)} become long candidates and the weakest/most stretched ${Math.floor(candidates * 0.3)} short candidates.`,
       points: profiles.map((x) => `${x.s} ${x.side} (score ${x.score.toFixed(2)}): ${x.p.name}, ${x.p.sector}, mkt cap $${Math.round(x.p.marketCap / 1e9)}B`),
     });
 
@@ -185,6 +197,7 @@ export async function runPipeline(runId: string): Promise<void> {
     const fits = usable.filter((a) => a.stance !== "bearish" && a.fit >= 6);
     let eligible = fits.filter((a) => a.side === "long" && a.stance === "bullish");
     if (eligible.length < minHoldings) eligible = [...eligible, ...fits.filter((a) => !eligible.includes(a)).sort((a, b) => b.composite - a.composite)];
+    if (eligible.length < minHoldings) eligible = usable.filter((a) => a.stance !== "bearish" && a.side === "long");
     if (eligible.length < minHoldings) eligible = usable.filter((a) => a.stance !== "bearish");
     if (eligible.length < minHoldings) eligible = usable;
     const summaries = eligible.map((a) => ({
