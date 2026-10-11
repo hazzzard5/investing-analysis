@@ -22,11 +22,11 @@ A thesis is written once and not regenerated, so you can see whether the origina
 
 ## Run it locally
 
-Needs Node 22+ and an Anthropic API key. No Docker required. Market data comes from Yahoo Finance by default (no key); macro data from FRED's public CSVs (no key).
+Needs Node 22+ and Claude Code installed and logged in (`npm i -g @anthropic-ai/claude-code`, then run `claude` once). The agents call the `claude` command, so they use your Claude plan and no API key is needed; set `ANTHROPIC_API_KEY` instead if you prefer pay-per-use. No Docker required. Market data comes from Yahoo Finance by default (no key); macro data from FRED's public CSVs (no key).
 
 ```bash
 npm install
-cp .env.example .env          # add ANTHROPIC_API_KEY
+cp .env.example .env
 npm run db                    # terminal 1: local Postgres on :54322 (data kept in .data/), applies migrations, leave running
 npm run dev                   # terminal 2: http://localhost:3000
 ```
