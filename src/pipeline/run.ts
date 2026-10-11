@@ -112,7 +112,7 @@ export async function runPipeline(runId: string): Promise<void> {
     // 2. Per-company analysis: fundamentals, valuation, sentiment, then devil's advocate
     await stage(runId, "analysis");
     const macro = await macroSnapshot();
-    const analysed = await pool(profiles, async ({ s, p }) => {
+    const analysed = await pool(profiles, async ({ s, p, side }) => {
       const { fund, hist } = cache.get(s)!;
       const n = await data.news(s).catch(() => []);
       const tech = technicals(hist);
@@ -131,6 +131,7 @@ export async function runPipeline(runId: string): Promise<void> {
       ]);
       const th = await agents.stockThesis(thesis, {
         ticker: s,
+        screening_side: side,
         last_price: p.price,
         dcf: dcfValue,
         analyst_target_mean: (fund as any).analystTargetMean ?? null,
@@ -146,7 +147,10 @@ export async function runPipeline(runId: string): Promise<void> {
           technicals: tech,
           macro,
         })
-        .catch(() => null);
+        .catch((e) => {
+          console.error(`trade idea failed for ${s}:`, e instanceof Error ? e.message : e);
+          return null;
+        });
       const idea = validateIdea(rawIdea, p.price, th);
       if (idea) {
         await sql`insert into trade_ideas (run_id, ticker, direction, entry, target, stop, reward_risk, last_price, horizon, condition, rationale, confidence, stance, thesis, entry_basis, target_basis, stop_basis, invalidation)
@@ -154,7 +158,7 @@ export async function runPipeline(runId: string): Promise<void> {
       }
       // Composite 1-10: bear-case strength counts against the stock.
       const composite = (f.score + v.score + ns.score + (11 - da.score)) / 4;
-      return { ticker: s, profile: p, price: Number(p.price), hist, composite, f, v, ns, da };
+      return { ticker: s, side, stance: th.stance, profile: p, price: Number(p.price), hist, composite, f, v, ns, da };
     });
 
     // 3. Risk (computed in code from price history)
@@ -174,25 +178,30 @@ export async function runPipeline(runId: string): Promise<void> {
 
     // 4. Portfolio construction
     await stage(runId, "portfolio");
-    const summaries = usable.map((a) => ({
+    // The proposed portfolio is long-only: short candidates and bearish theses appear as trade ideas, not holdings.
+    let eligible = usable.filter((a) => a.side === "long" && a.stance !== "bearish");
+    if (eligible.length < minHoldings) eligible = usable.filter((a) => a.stance !== "bearish");
+    if (eligible.length < minHoldings) eligible = usable;
+    const summaries = eligible.map((a) => ({
       ticker: a.ticker,
       name: a.profile.name,
       sector: a.profile.sector,
+      stance: a.stance,
       composite: Number(a.composite.toFixed(2)),
       fundamentals: a.f.verdict,
       valuation: a.v.verdict,
       sentiment: a.ns.verdict,
       bear_case: a.da.summary,
     }));
-    const byTicker = new Map(usable.map((a) => [a.ticker, a]));
+    const byTicker = new Map(eligible.map((a) => [a.ticker, a]));
     let picks = (await agents.construct(thesis, { maxWeight, minHoldings }, summaries).catch(() => ({ picks: [] }))).picks
       .map((p) => ({ ...p, ticker: String(p.ticker).toUpperCase() }))
       .filter((p, i, all) => byTicker.has(p.ticker) && all.findIndex((x) => x.ticker === p.ticker) === i);
     // Fall back to top composite scores if the model picked too few valid names.
     if (picks.length < minHoldings) {
-      picks = [...usable]
+      picks = [...eligible]
         .sort((a, b) => b.composite - a.composite)
-        .slice(0, Math.max(minHoldings, Math.min(8, usable.length)))
+        .slice(0, Math.max(minHoldings, Math.min(8, eligible.length)))
         .map((a) => ({ ticker: a.ticker, weight: a.composite, rationale: "Top composite analyst score." }));
     }
     // Enforce rules in code, whatever the model returned.
@@ -241,7 +250,7 @@ export async function runPipeline(runId: string): Promise<void> {
       top_sector: topSector,
       holdings: held.map((h) => ({ ticker: h.ticker, weight: h.weight, sector: h.sector })),
       benchmark_spy: { volatility: spyVol, max_drawdown_1y: spyDD },
-      note: "Drawdown and volatility are backward-looking over about one year.",
+      note: "Drawdown and volatility are backward-looking over about one year." + (topSectorWeight > 0.5 ? ` Concentration warning: ${(topSectorWeight * 100).toFixed(0)}% of the portfolio is in ${topSector}. Say what that means for risk.` : ""),
     });
     await saveMemo(runId, "risk", null, rm);
     await saveMemo(runId, "portfolio", null, {
