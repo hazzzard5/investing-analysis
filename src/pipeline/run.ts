@@ -119,7 +119,7 @@ export async function runPipeline(runId: string): Promise<void> {
     await saveMemo(runId, "screening", null, {
       verdict: `${profiles.length} of ${metrics.length} ranked`,
       score: 5,
-      summary: `${pick.rationale} Pool: ${pool_.length} S&P 500 names in ${[...wanted].join(", ") || "named tickers"}; ${metrics.length} of ${pool_.length} had usable data and ${screened === metrics ? "relevance scoring was unavailable" : `${screened.length} scored as relevant to the thesis`}. Ranked on growth, margins, FCF yield, momentum, valuation and leverage; the top ${candidates - Math.floor(candidates * 0.3)} become long candidates and the weakest/most stretched ${Math.floor(candidates * 0.3)} short candidates.`,
+      summary: `${pick.rationale} Pool: ${pool_.length} S&P 500 names in ${[...wanted].join(", ") || "named tickers"}; ${cache.size} of ${pool_.length} returned data and ${metrics.length} passed the size limit; ${screened === metrics ? "relevance scoring was unavailable" : `${screened.length} scored as relevant to the thesis`}. Ranked on growth, margins, FCF yield, momentum, valuation and leverage; the top ${candidates - Math.floor(candidates * 0.3)} become long candidates and the weakest/most stretched ${Math.floor(candidates * 0.3)} short candidates.`,
       points: profiles.map((x) => `${x.s} ${x.side} (score ${x.score.toFixed(2)}): ${x.p.name}, ${x.p.sector}, mkt cap $${Math.round(x.p.marketCap / 1e9)}B`),
     });
 
