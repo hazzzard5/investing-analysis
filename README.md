@@ -46,7 +46,18 @@ npm run monitor               # advance trade ideas and record paper-portfolio v
 
 `npm run run:pipeline` starts a new thesis (ad hoc or from a scheduler). Schedule `npm run monitor` (it also records paper-portfolio snapshots) with cron, launchd or Task Scheduler. When deployed, call `GET /api/cron/monitor` with `Authorization: Bearer $CRON_SECRET`.
 
-## Deploying later (Vercel + hosted Supabase)
+## Scheduling on your own computer
+
+Everything runs locally, so use your computer's scheduler. `npm run monitor` is the only job you need on a schedule (daily or weekly; it never rewrites a thesis). Start new theses from the dashboard or `npm run run:pipeline`.
+
+```cron
+# Weekdays at 5:30pm local time (after the US close; data is end-of-day anyway)
+30 17 * * 1-5  cd /path/to/investing-analysis && npm run monitor >> monitor.log 2>&1
+```
+
+The computer must be awake and the database running (`npx supabase start`) when the job fires. On macOS use `launchd` or Calendar-triggered Shortcuts if cron is awkward; on Windows use Task Scheduler. A missed run is harmless: the next run catches up on all the closes since the last check.
+
+## If you ever host it (Vercel + hosted Supabase)
 
 Set `ANTHROPIC_API_KEY` (and `FMP_API_KEY` if using FMP), `DATABASE_URL` (Supabase connection string) and `CRON_SECRET` as environment variables. The run button currently starts the pipeline inside the request process, which suits a local server; on serverless a run can exceed the function time limit, so move `runPipeline` behind a queue or split it per stage first.
 
