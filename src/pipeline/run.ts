@@ -50,7 +50,7 @@ export async function runPipeline(runId: string): Promise<void> {
     const amount = Number(run.amount);
     const maxWeight = Number(run.max_weight);
     const minHoldings = Number(run.min_holdings);
-    const candidates = Math.max(minHoldings, Number(run.candidates ?? 15));
+    const candidates = Math.max(minHoldings, Number(run.candidates ?? 8));
 
     await sql`update runs set status = 'running', started_at = now(), error = null where id = ${runId}`;
 
@@ -261,7 +261,7 @@ export async function runPipeline(runId: string): Promise<void> {
 
 export async function createRun(input: { text: string; amount: number; maxWeight: number; minHoldings: number; candidates?: number }) {
   const [t] = await sql`insert into theses (text, amount, max_weight, min_holdings, candidates)
-                        values (${input.text}, ${input.amount}, ${input.maxWeight}, ${input.minHoldings}, ${input.candidates ?? 15}) returning id`;
+                        values (${input.text}, ${input.amount}, ${input.maxWeight}, ${input.minHoldings}, ${input.candidates ?? 8}) returning id`;
   const [r] = await sql`insert into runs (thesis_id) values (${t.id}) returning id`;
   return r.id as string;
 }
